@@ -32,12 +32,12 @@ The tool defaults to searching within `paris`, but the `-c` flag overrides this:
 cargo run -- 14000 -c caen
 ```
 
-Since the search radius can be wider than expected, especially in a city,
-exclude aany postal code with the `-x` flag:
+Since the search radius can be wider than desired, especially in a city,
+exclude any postal code with the `-x` flag (can be specified more than once):
 
 ```sh
-# reject results in Beauvais 66000
-cargo run -- 75001 -x 66000
+# don't show results in Beauvais 60000 and Gisors 27140
+cargo run -- 75001 -x 60000 -x 27140
 ```
 
 Specify how many search result pages to scrape with the `-p` flag (defaults to `1`):
@@ -55,5 +55,4 @@ only receive an email on a hit!
 
 ## Next steps
 
-* Allow the `-x` flag to be used multiple times
 * Test in more cities than just Paris

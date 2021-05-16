@@ -65,6 +65,8 @@ fn app() -> App<'static, 'static> {
                 .short("x")
                 .long("exclude")
                 .takes_value(true)
+                .multiple(true)
+                .number_of_values(1)
                 .value_name("POSTAL_CODE"),
         )
         .arg(
@@ -86,7 +88,8 @@ async fn main() {
     let postal_code = matches.value_of("postal_code").unwrap();
     let city = matches.value_of("city").unwrap();
     let pages = matches.value_of("pages").unwrap().parse::<u32>().unwrap();
-    let exclude_postal_code = matches.value_of("exclude_postal_code");
+    let exclude_postal_codes: Vec<&str> =
+        matches.values_of("exclude_postal_code").unwrap().collect();
 
     for page in 0..pages {
         let search_url = if page == 0 {
@@ -118,28 +121,28 @@ async fn main() {
                 availabilities,
                 ..
             } = details_response.json().await.unwrap();
-            if let Some(exclude_postal_code) = exclude_postal_code {
-                if search_result.zipcode == exclude_postal_code {
-                    continue;
+            if !exclude_postal_codes
+                .iter()
+                .any(|x| *x == search_result.zipcode)
+            {
+                let mut times = vec![];
+                for availability in availabilities {
+                    times.extend(
+                        availability
+                            .slots
+                            .into_iter()
+                            .map(|x| x.start_date)
+                            .collect::<Vec<_>>(),
+                    );
                 }
-            }
-            let mut times = vec![];
-            for availability in availabilities {
-                times.extend(
-                    availability
-                        .slots
-                        .into_iter()
-                        .map(|x| x.start_date)
-                        .collect::<Vec<_>>(),
-                );
-            }
-            if !times.is_empty() {
-                let times = times.join("\n");
-                let address = format!("{}, {}", search_result.address, search_result.zipcode);
-                info!(
-                    "{} at {} has slots!\nhttps://doctolib.fr{}\n{}",
-                    search_result.name_with_title, address, search_result.url, times
-                );
+                if !times.is_empty() {
+                    let times = times.join("\n");
+                    let address = format!("{}, {}", search_result.address, search_result.zipcode);
+                    info!(
+                        "{} at {} has slots!\nhttps://doctolib.fr{}\n{}",
+                        search_result.name_with_title, address, search_result.url, times
+                    );
+                }
             }
         }
     }

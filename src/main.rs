@@ -31,6 +31,7 @@ struct CenterResponse {
     city: String,
     name_with_title: String,
     zipcode: String,
+    url: String,
 }
 
 fn get_center_id(element_id: &str) -> &str {
@@ -54,6 +55,7 @@ fn app() -> App<'static, 'static> {
                 .help("City name in which to perform the search")
                 .short("c")
                 .long("city")
+                .takes_value(true)
                 .default_value("paris")
                 .value_name("CITY"),
         )
@@ -62,7 +64,17 @@ fn app() -> App<'static, 'static> {
                 .help("Exclude centers at the given postal code")
                 .short("x")
                 .long("exclude")
+                .takes_value(true)
                 .value_name("POSTAL_CODE"),
+        )
+        .arg(
+            Arg::with_name("pages")
+                .help("Number of search results pages to scrape")
+                .short("p")
+                .long("pages")
+                .default_value("1")
+                .takes_value(true)
+                .value_name("NUMBER_OF_PAGES"),
         )
 }
 
@@ -73,53 +85,62 @@ async fn main() {
     let matches = app().get_matches();
     let postal_code = matches.value_of("postal_code").unwrap();
     let city = matches.value_of("city").unwrap();
+    let pages = matches.value_of("pages").unwrap().parse::<u32>().unwrap();
     let exclude_postal_code = matches.value_of("exclude_postal_code");
-    let search_url = format!("https://www.doctolib.fr/vaccination-covid-19/{}-{}?ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&force_max_limit=2", postal_code, city);
-    let resp = reqwest::get(search_url).await.unwrap();
 
-    assert!(resp.status().is_success());
+    for page in 0..pages {
+        let search_url = if page == 0 {
+            format!("https://www.doctolib.fr/vaccination-covid-19/{}-{}?ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&force_max_limit=2", postal_code, city)
+        } else {
+            let real_page = page + 1;
+            format!("https://www.doctolib.fr/vaccination-covid-19/{}-{}?ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&force_max_limit=2&page={}", postal_code, city, real_page)
+        };
+        let resp = reqwest::get(search_url).await.unwrap();
 
-    let body = resp.text().await.unwrap();
-    // parses string of HTML as a document
-    let fragment = Html::parse_document(&body);
-    // parses based on a CSS selector
-    let results = Selector::parse(".dl-search-result").unwrap();
+        assert!(resp.status().is_success());
 
-    // iterate over elements matching our selector
-    for result in fragment.select(&results) {
-        // get the center's id
-        let id = get_center_id(result.value().id().unwrap());
+        let body = resp.text().await.unwrap();
+        // parses string of HTML as a document
+        let fragment = Html::parse_document(&body);
+        // parses based on a CSS selector
+        let results = Selector::parse(".dl-search-result").unwrap();
 
-        let details_response = reqwest::get(format!( "https://www.doctolib.fr/search_results/{}.json?limit=4&ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&speciality_id=5494&search_result_format=json", id)).await.unwrap();
+        // iterate over elements matching our selector
+        for result in fragment.select(&results) {
+            // get the center's id
+            let id = get_center_id(result.value().id().unwrap());
 
-        debug!("{:?}", result.text().collect::<Vec<_>>().join(", "));
-        let DetailResponse {
-            search_result,
-            availabilities,
-            ..
-        } = details_response.json().await.unwrap();
-        if let Some(exclude_postal_code) = exclude_postal_code {
-            if search_result.zipcode == exclude_postal_code {
-                continue;
+            let details_response = reqwest::get(format!( "https://www.doctolib.fr/search_results/{}.json?limit=4&ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&speciality_id=5494&search_result_format=json", id)).await.unwrap();
+
+            debug!("{:?}", result.text().collect::<Vec<_>>().join(", "));
+            let DetailResponse {
+                search_result,
+                availabilities,
+                ..
+            } = details_response.json().await.unwrap();
+            if let Some(exclude_postal_code) = exclude_postal_code {
+                if search_result.zipcode == exclude_postal_code {
+                    continue;
+                }
             }
-        }
-        let mut times = vec![];
-        for availability in availabilities {
-            times.extend(
-                availability
-                    .slots
-                    .into_iter()
-                    .map(|x| x.start_date)
-                    .collect::<Vec<_>>(),
-            );
-        }
-        if !times.is_empty() {
-            let times = times.join("\n");
-            let address = format!("{}, {}", search_result.address, search_result.zipcode);
-            info!(
-                "{} at {} has slots!\n{}",
-                search_result.name_with_title, address, times
-            );
+            let mut times = vec![];
+            for availability in availabilities {
+                times.extend(
+                    availability
+                        .slots
+                        .into_iter()
+                        .map(|x| x.start_date)
+                        .collect::<Vec<_>>(),
+                );
+            }
+            if !times.is_empty() {
+                let times = times.join("\n");
+                let address = format!("{}, {}", search_result.address, search_result.zipcode);
+                info!(
+                    "{} at {} has slots!\nhttps://doctolib.fr{}\n{}",
+                    search_result.name_with_title, address, search_result.url, times
+                );
+            }
         }
     }
 }
@@ -191,7 +212,7 @@ mod tests {
             "toFinalizeStep": false,
             "toFinalizeStepWithoutState": false,
             "top_specialities": ["1 salle de vaccination"],
-            "url": "/centre-de-sante/paris/centre-covid19-paris-5?highlight%5Bspeciality_ids%5D%5B%5D=5494",
+            "url": "/centre-de-sante/paris/centre-covid19-paris-5?highlight[speciality_ids][]=5494",
             "visit_motive_id": 2860338,
             "visit_motive_name": "1re injection vaccin COVID-19 (Pfizer-BioNTech)",
             "zipcode": "75005"

@@ -110,7 +110,7 @@ async fn main() {
             // get the center's id
             let id = get_center_id(result.value().id().unwrap());
 
-            let details_response = reqwest::get(format!( "https://www.doctolib.fr/search_results/{}.json?limit=4&ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&speciality_id=5494&search_result_format=json", id)).await.unwrap();
+            let details_response = reqwest::get(format!("https://www.doctolib.fr/search_results/{}.json?limit=4&ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&speciality_id=5494&search_result_format=json&force_max_limit=2", id)).await.unwrap();
 
             debug!("{:?}", result.text().collect::<Vec<_>>().join(", "));
             let DetailResponse {

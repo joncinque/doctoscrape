@@ -56,3 +56,4 @@ only receive an email on a hit!
 ## Next steps
 
 * Test in more cities than just Paris
+* Make API requests in parallel, no reason to `await` everything!

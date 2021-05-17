@@ -1,6 +1,6 @@
 use {
     clap::{App, Arg},
-    log::{debug, info},
+    log::{debug, error, info},
     reqwest,
     scraper::{Html, Selector},
     serde::Deserialize,
@@ -116,32 +116,35 @@ async fn main() {
             let details_response = reqwest::get(format!("https://www.doctolib.fr/search_results/{}.json?limit=4&ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&speciality_id=5494&search_result_format=json&force_max_limit=2", id)).await.unwrap();
 
             debug!("{:?}", result.text().collect::<Vec<_>>().join(", "));
-            let DetailResponse {
-                search_result,
-                availabilities,
-                ..
-            } = details_response.json().await.unwrap();
-            if !exclude_postal_codes
-                .iter()
-                .any(|x| *x == search_result.zipcode)
-            {
-                let mut times = vec![];
-                for availability in availabilities {
-                    times.extend(
-                        availability
-                            .slots
-                            .into_iter()
-                            .map(|x| x.start_date)
-                            .collect::<Vec<_>>(),
-                    );
+            let parse_result = details_response.json().await;
+            match parse_result {
+                Ok(DetailResponse { search_result, availabilities, .. }) => {
+                    if !exclude_postal_codes
+                        .iter()
+                        .any(|x| *x == search_result.zipcode)
+                    {
+                        let mut times = vec![];
+                        for availability in availabilities {
+                            times.extend(
+                                availability
+                                    .slots
+                                    .into_iter()
+                                    .map(|x| x.start_date)
+                                    .collect::<Vec<_>>(),
+                            );
+                        }
+                        if !times.is_empty() {
+                            let times = times.join("\n");
+                            let address = format!("{}, {}", search_result.address, search_result.zipcode);
+                            info!(
+                                "{} at {} has slots!\nhttps://doctolib.fr{}\n{}",
+                                search_result.name_with_title, address, search_result.url, times
+                            );
+                        }
+                    }
                 }
-                if !times.is_empty() {
-                    let times = times.join("\n");
-                    let address = format!("{}, {}", search_result.address, search_result.zipcode);
-                    info!(
-                        "{} at {} has slots!\nhttps://doctolib.fr{}\n{}",
-                        search_result.name_with_title, address, search_result.url, times
-                    );
+                Err(e) => {
+                    error!("JSON parse error: {:?}", e);
                 }
             }
         }

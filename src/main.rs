@@ -158,7 +158,7 @@ async fn main() {
     let city = matches.value_of("city").unwrap();
     let pages = matches.value_of("pages").unwrap().parse::<u32>().unwrap();
     let exclude_postal_codes: Vec<&str> =
-        matches.values_of("exclude_postal_code").unwrap().collect();
+        matches.values_of("exclude_postal_code").map_or(vec![], |e| e.collect());
 
     let mut futures = vec![];
     for page in 0..pages {

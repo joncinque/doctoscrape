@@ -1,7 +1,8 @@
 use {
     clap::{App, Arg},
+    futures::future::join_all,
     log::{debug, error, info},
-    reqwest,
+    reqwest::{self, Error},
     scraper::{Html, Selector},
     serde::Deserialize,
 };
@@ -80,6 +81,74 @@ fn app() -> App<'static, 'static> {
         )
 }
 
+async fn get_details(id: &str) -> Result<DetailResponse, Error> {
+    let details_response = reqwest::get(format!("https://www.doctolib.fr/search_results/{}.json?limit=4&ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&speciality_id=5494&search_result_format=json&force_max_limit=2", id)).await.unwrap();
+
+    details_response.json().await
+}
+
+async fn get_page_results(postal_code: &str, city: &str, page: u32) -> Vec<Result<DetailResponse, Error>> {
+    let search_url = if page == 0 {
+        format!("https://www.doctolib.fr/vaccination-covid-19/{}-{}?ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&force_max_limit=2", postal_code, city)
+    } else {
+        let real_page = page + 1;
+        format!("https://www.doctolib.fr/vaccination-covid-19/{}-{}?ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&force_max_limit=2&page={}", postal_code, city, real_page)
+    };
+
+    let resp = reqwest::get(search_url).await.unwrap();
+
+    assert!(resp.status().is_success());
+
+    let body = resp.text().await.unwrap();
+    // parses string of HTML as a document
+    let fragment = Html::parse_document(&body);
+    // parses based on a CSS selector
+    let results = Selector::parse(".dl-search-result").unwrap();
+
+    let mut details = vec![];
+    // iterate over elements matching our selector
+    for result in fragment.select(&results) {
+        debug!("{:?}", result.text().collect::<Vec<_>>().join(", "));
+
+        let id = get_center_id(result.value().id().unwrap());
+        details.push(get_details(&id));
+    }
+    join_all(details).await
+}
+
+fn log_result(detail_result: Result<DetailResponse, Error>, exclude_postal_codes: &Vec<&str>) {
+    match detail_result {
+        Ok(DetailResponse { search_result, availabilities, .. }) => {
+            if !exclude_postal_codes
+                .iter()
+                .any(|x| *x == search_result.zipcode)
+            {
+                let mut times = vec![];
+                for availability in availabilities {
+                    times.extend(
+                        availability
+                            .slots
+                            .into_iter()
+                            .map(|x| x.start_date)
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                if !times.is_empty() {
+                    let times = times.join("\n");
+                    let address = format!("{}, {}", search_result.address, search_result.zipcode);
+                    info!(
+                        "{} at {} has slots!\nhttps://doctolib.fr{}\n{}",
+                        search_result.name_with_title, address, search_result.url, times
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            error!("JSON parse error: {:?}", e);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -91,63 +160,15 @@ async fn main() {
     let exclude_postal_codes: Vec<&str> =
         matches.values_of("exclude_postal_code").unwrap().collect();
 
+    let mut futures = vec![];
     for page in 0..pages {
-        let search_url = if page == 0 {
-            format!("https://www.doctolib.fr/vaccination-covid-19/{}-{}?ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&force_max_limit=2", postal_code, city)
-        } else {
-            let real_page = page + 1;
-            format!("https://www.doctolib.fr/vaccination-covid-19/{}-{}?ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&force_max_limit=2&page={}", postal_code, city, real_page)
-        };
-        let resp = reqwest::get(search_url).await.unwrap();
+        futures.push(get_page_results(&postal_code, &city, page));
+    }
 
-        assert!(resp.status().is_success());
+    let all_results = join_all(futures).await;
 
-        let body = resp.text().await.unwrap();
-        // parses string of HTML as a document
-        let fragment = Html::parse_document(&body);
-        // parses based on a CSS selector
-        let results = Selector::parse(".dl-search-result").unwrap();
-
-        // iterate over elements matching our selector
-        for result in fragment.select(&results) {
-            // get the center's id
-            let id = get_center_id(result.value().id().unwrap());
-
-            let details_response = reqwest::get(format!("https://www.doctolib.fr/search_results/{}.json?limit=4&ref_visit_motive_ids[]=6970&ref_visit_motive_ids[]=7005&speciality_id=5494&search_result_format=json&force_max_limit=2", id)).await.unwrap();
-
-            debug!("{:?}", result.text().collect::<Vec<_>>().join(", "));
-            let parse_result = details_response.json().await;
-            match parse_result {
-                Ok(DetailResponse { search_result, availabilities, .. }) => {
-                    if !exclude_postal_codes
-                        .iter()
-                        .any(|x| *x == search_result.zipcode)
-                    {
-                        let mut times = vec![];
-                        for availability in availabilities {
-                            times.extend(
-                                availability
-                                    .slots
-                                    .into_iter()
-                                    .map(|x| x.start_date)
-                                    .collect::<Vec<_>>(),
-                            );
-                        }
-                        if !times.is_empty() {
-                            let times = times.join("\n");
-                            let address = format!("{}, {}", search_result.address, search_result.zipcode);
-                            info!(
-                                "{} at {} has slots!\nhttps://doctolib.fr{}\n{}",
-                                search_result.name_with_title, address, search_result.url, times
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("JSON parse error: {:?}", e);
-                }
-            }
-        }
+    for result in all_results.into_iter().flatten() {
+        log_result(result, &exclude_postal_codes);
     }
 }
 
